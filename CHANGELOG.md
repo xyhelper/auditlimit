@@ -17,6 +17,11 @@
   - 未单独配置的模型会落到 `DEFAULT`，将 `DEFAULT` 写成 `DISABLED` 即可禁用所有未单独配置的模型。
   - 新增 `config.DisabledValue`、`config.IsDisabled()`、`config.IsModelDisabled()` 与 `api.ErrModelDisabled`，并补充单元测试。
 - README 新增「禁用返回格式」章节与「值的格式 - 禁用某个模型」小节；「值的格式」与「完整示例」中的示例模型更新为当前模型清单，并给出 `DISABLED` 的书写示例。
+- README 新增构建版本要求说明：**从源码构建需要 Go 1.26 及以上版本**（Docker 部署不受影响）。
+- README「值的格式 - 禁用某个模型」补充两个易踩的边界：
+  - 把 `DEFAULT` 写成 `DISABLED` 时，`AUTO`、`RESEARCH`、`AGENT` 会因回退到 `DEFAULT` 而**被一并禁用**；若只想禁用未命名/未知模型，需显式给这三项写成合法限流值。
+  - 请求体中 `model` 字段缺失或为空时会直接返回 403，响应消息里的模型名位置为空白；若 `DEFAULT` 不是 `DISABLED`，空模型名则回退到 `DEFAULT` 的限流值并放行，不报错。
+- README「特殊键」小节合并了重复条目，并明确“删掉 `RESEARCH`/`AGENT`/`AUTO` 并不会让对应模型不受限流，而是回退到 `DEFAULT`”。
 
 ### 变更
 
@@ -36,6 +41,7 @@
   - 「Codex 内部别名」（`eligible_codex_model_slugs`）不受影响，继续保留。注意 `GPT-5-5`（chat 的 `gpt-5-5`，已不可选）与 `GPT-5_5`（Codex 别名 `gpt-5.5`，仍在使用）只差一个字符，是两个不同的键，删除前者不影响后者。
   - 对照例：`gpt-5-6-mini` 与 `gpt-5-6-t-mini` 的上游标题都叫「GPT-5.6 Luna」，但只有 `gpt-5-6-t-mini` 在可选集合中，因此仅后者保留为有效配置。
 - 将请求体 `system_hints` 中 `research` / `agent` 覆盖模型名的逻辑提前到内容审核之前，使模型禁用判断、内容审核与限流都基于最终生效的模型名（对外行为无变化）。
+- 移除 `config/config.yaml` 中的调试用键 `TEST: "1/1h"`（无任何代码引用，仅作验证用途）。
 - `DEFAULT`、`RESEARCH`、`AGENT`、`AUTO` 的取值保持不变；`docker-compose.yml` 补充了 `AGENT`（原先只有一个），与 `config.yaml` 对齐。
 - 修正 README 中对 `AUTO` 的描述：`AUTO` 与 `RESEARCH`/`AGENT` 一样都是**普通模型键**（分别对应模型名 `auto`/`research`/`agent`），不是特殊键。`auto` 对应模型选择器中的「Auto」档，它不出现在上游 `models[].slug` 中（只以 `categories` 中 `category: gpt_5_auto`、`model_lane: "auto"` 的形式存在）。实测：删掉 `AUTO` 后 `model=auto` 会回退到 `DEFAULT`；把 `DEFAULT` 设为 `DISABLED` 时 `auto`/`research`/`agent` 会一并被禁。真正的特殊键只有 `DEFAULT`、`PORT`、`OAIKEY`、`MODERATION`。
 - 升级依赖至最新版本：
@@ -52,7 +58,7 @@
 ### 修复
 
 - **修复升级 gogf/gf 后 `config/config.yaml` 全部配置项被静默忽略的问题。**
-  gf v2.10 起 `GetWithEnv` 会先用 `utils.FormatCmdKey()` 将键名转成小写再去查配置文件，而本项目 `config.yaml` 使用与 README 环境变量同名的大写键（如 `GPT-4O`、`TEXT-DAVINCI-002-RENDER-SHA`），键名被小写化后无法命中，导致配置被忽略并回退到硬编码兜底值。例如 `TEST: 1/1h` 会被读成 `40/3h`，`MODERATION` 也会退回硬编码地址。
+  gf v2.10 起 `GetWithEnv` 会先用 `utils.FormatCmdKey()` 将键名转成小写再去查配置文件，而本项目 `config.yaml` 使用与 README 环境变量同名的大写键（如 `GPT-4O`、`TEXT-DAVINCI-002-RENDER-SHA`），键名被小写化后无法命中，导致配置被忽略并回退到硬编码兜底值。例如当时配置里用于验证的 `TEST: 1/1h` 会被读成 `40/3h`，`MODERATION` 也会退回硬编码地址（该调试用键已在同一版本中移除）。
   现已改为按原始键名显式查找（`config/config.go`、`api/limit.go` 中相关调用全部改用 `GetStringWithEnv`）。`GetEffective` / `MustGetEffective` 存在同样的小写化行为，无法用于规避此问题。
 - 保持「配置文件优先」的原有优先级语义。`GetStringWithEnv` 严格复刻旧版 gf `GetWithEnv` 的行为：只要 `config.yaml` 中存在该键就直接采用（即使其值为空字符串），仅在该键不存在时才回退到同名环境变量。因此 `config.yaml` 中显式留空的 `OAIKEY: ""` 依然会屏蔽同名环境变量，与升级前一致。
 - 避免无配置文件时 panic。`g.Cfg().MustGet` 在找不到配置文件时（例如 Docker 镜像内仅有二进制与 `data/` 目录）会 panic，`GetStringWithEnv` 内部改用 `g.Cfg().Get` 并校验错误码；此时环境变量仍可正常生效。

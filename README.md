@@ -38,6 +38,8 @@ docker-compose up -d
 
 限流器接口地址为: `http://ip:9611/audit_limit`
 
+> 从源码构建需要 **Go 1.26 及以上版本**（该要求来自 `golang.org/x/{net,sys,text,time}` 的最新版，见 `go.mod` 中的 `go` 指令）。使用上面的 Docker 镜像部署无需关心此项。
+
 ## 配置说明
 
 配置有三个来源，优先级从高到低为：
@@ -111,6 +113,11 @@ environment:
 - 未单独配置的模型会落到 `DEFAULT`，由 `DEFAULT` 决定是否禁用；把 `DEFAULT` 写成 `DISABLED` 即可禁用所有未单独配置的模型。
 - 请求体 `system_hints` 中的 `research` / `agent` 会覆盖模型名，进而命中 `RESEARCH` / `AGENT`，所以一般**不要**把这两项设为 `DISABLED`，否则研究 / 代理模式会整体不可用。
 
+两个容易踩的边界：
+
+- **`DEFAULT: "DISABLED"` 会连带禁用 `AUTO`、`RESEARCH`、`AGENT`。** 这三个都是普通模型键，删掉后对应模型会回退到 `DEFAULT`。若只想禁用“没名字的“未知模型，需要把 `AUTO`、`RESEARCH`、`AGENT` 显式写成合法限流值（如 `AUTO: "200/3h"`）。同理，任何需要放行的模型都必须显式配置。
+- **请求体中 `model` 字段缺失或为空时会直接返回 403**，而不是 400。此时响应消息里的模型名位置是空白，形如 `The model  is disabled.`。若 `DEFAULT` 不是 `DISABLED`，空模型名会回退到 `DEFAULT` 的限流值而正常放行，不会报错。
+
 ### 三、特殊键
 
 除模型键外，还有几个固定用途的键：
@@ -125,9 +132,8 @@ environment:
 说明：
 
 - `DEFAULT` 本身也是一个模型键，只是充当所有未命中模型的兜底项。若 `DEFAULT` 缺失或其值格式不合法，则使用代码内置的 `40/3h`。
-- `RESEARCH`、`AGENT`、`AUTO` 都是普通模型键（分别对应 `research`、`agent`、`auto` 三个模型名），不是特殊键，详见「当前模型列表」。
-- `OAIKEY`、`MODERATION`、`PORT` 只在进程启动时读取一次，修改后需重启生效。
-- `RESEARCH` 与 `AGENT` 是普通模型键，但当请求体的 `system_hints` 中出现 `research` / `agent` 时，模型名会被强制替换为 `research` / `agent`，从而命中这两个键。
+- `RESEARCH`、`AGENT`、`AUTO` 都是普通模型键（分别对应 `research`、`agent`、`auto` 三个模型名），不是特殊键，详见「当前模型列表」。也就是说，**删掉它们并不会让对应模型不受限流，而是会回退到 `DEFAULT`**。
+- `RESEARCH` 与 `AGENT` 的特别之处在于：当请求体的 `system_hints` 中出现 `research` / `agent` 时，模型名会被强制替换为 `research` / `agent`，从而命中这两个键。
 - 把任意模型键的值写成 `DISABLED` 即可禁止用户使用该模型，详见「值的格式 - 禁用某个模型」。
 - `OAIKEY`、`MODERATION`、`PORT` 只在进程启动时读取一次，修改后需重启生效。
 
