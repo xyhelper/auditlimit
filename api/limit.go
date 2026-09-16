@@ -1,6 +1,7 @@
 package api
 
 import (
+	"auditlimit/config"
 	"strings"
 	"sync"
 	"time"
@@ -37,9 +38,9 @@ func GetVisitor(key string, limit int, per time.Duration) *rate.Limiter {
 
 func GetVisitorWithModel(ctx g.Ctx, token, model string) (limit int, per time.Duration, limiter *rate.Limiter, err error) {
 	model = gstr.ToUpper(model)
-	modelrate := g.Cfg().MustGetWithEnv(ctx, model).String()
+	modelrate := config.GetStringWithEnv(ctx, model)
 	if modelrate == "" {
-		modelrate = g.Cfg().MustGetWithEnv(ctx, "DEFAULT").String()
+		modelrate = config.GetStringWithEnv(ctx, "DEFAULT")
 	}
 	modelratearr := strings.Split(modelrate, "/")
 	// g.Dump(modelratearr)
