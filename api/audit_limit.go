@@ -10,15 +10,16 @@ import (
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
-	"github.com/gogf/gf/v2/util/gconv"
 )
 
 func AuditLimit(r *ghttp.Request) {
 	ctx := r.Context()
 	// 获取Bearer Token 用来判断用户身份
 	token := r.Header.Get("Authorization")
-	// 移除Bearer
-	if token != "" {
+	// 移除 "Bearer " 前缀。
+	// 不能像旧版那样无条件截掉前 7 个字符: 头部长度不足 7 时会 panic 成 500,
+	// 不带前缀的 token 也会被截错, 使不同用户碰撞到同一份额度。
+	if len(token) > 7 && strings.EqualFold(token[:7], "bearer ") {
 		token = token[7:]
 	}
 	g.Log().Debug(ctx, "token", token)
@@ -31,11 +32,13 @@ func AuditLimit(r *ghttp.Request) {
 	// 获取请求内容
 	reqJson, err := r.GetJson()
 	if err != nil {
+		// 必须 return: 否则会继续按空请求体往下走, 最后用 200 覆盖掉刚写好的 400。
 		g.Log().Error(ctx, "GetJson", err)
 		r.Response.Status = 400
 		r.Response.WriteJson(g.Map{
 			"detail": err.Error(),
 		})
+		return
 	}
 	action := reqJson.Get("action").String() // action为 next时才是真正的请求，否则可能是继续上次请求 action 为 variant 时为重新生成
 	g.Log().Debug(ctx, "action", action)
@@ -91,11 +94,13 @@ func AuditLimit(r *ghttp.Request) {
 		//g.Log().Debug(ctx, "resp:", respBody)
 		g.Dump(respVar)
 		respJson := gjson.New(respVar)
+		// 这里是**有意为之**的 fail-open 设计: 审核接口不可达、返回非 JSON 或缺少 results 字段时,
+		// 下面的取值会得到 false, 即按"通过"放行。目的是不让审核服务的异常连带影响主业务;
+		// 改成 fail-closed 会导致上游抖动时整个服务都不可用。排障请看上面的 g.Dump 输出。
 		isFlagged := respJson.Get("results.0.flagged").Bool()
 		g.Log().Debug(ctx, "flagged", isFlagged)
 		if isFlagged {
-			r.Response.Status = 400
-			r.Response.WriteJson(MsgMod400)
+			writeModerationRejected(r)
 			return
 		}
 	}
@@ -118,23 +123,17 @@ func AuditLimit(r *ghttp.Request) {
 	remain := limiter.TokensAt(time.Now())
 	g.Log().Debug(ctx, token, model, "remain", remain, "limit", limit, "per", per)
 	if remain < 1 {
-		r.Response.Status = 429
 		reservation := limiter.ReserveN(time.Now(), 1)
 		if !reservation.OK() {
-			// 处理预留失败的情况，例如返回错误
-			r.Response.WriteJson(g.Map{
-				"detail": "You have triggered the usage frequency limit of " + model + ", the current limit is " + gconv.String(limit) + " times/" + gconv.String(per) + ", please wait a moment before trying again.\n" + "您已经触发 " + model + " 使用频率限制,当前限制为 " + gconv.String(limit) + " 次/" + gconv.String(per) + ",请稍后再试.",
-			})
-			reservation.Cancel() // 取消预留，不消耗令牌
+			// 处理预留失败的情况(已超出突发额度), 此时无法给出具体等待时间
+			writeTooManyRequests(r, model, limit, per, 0)
 			return
 		}
 		delayFrom := reservation.Delay()
 		reservation.Cancel() // 取消预留，不消耗令牌
 
 		g.Log().Debug(ctx, "delayFrom", delayFrom)
-		r.Response.WriteJson(g.Map{
-			"detail": "You have triggered the usage frequency limit of " + model + ", the current limit is " + gconv.String(limit) + " times/" + gconv.String(per) + ", please wait " + gconv.String(int(delayFrom.Seconds())) + " seconds before trying again.\n" + "您已经触发 " + model + " 使用频率限制,当前限制为 " + gconv.String(limit) + " 次/" + gconv.String(per) + ",请等待 " + gconv.String(int(delayFrom.Seconds())) + " 秒后再试.",
-		})
+		writeTooManyRequests(r, model, limit, per, int(delayFrom.Seconds()))
 		return
 	}
 	// 消耗一个令牌
@@ -142,18 +141,6 @@ func AuditLimit(r *ghttp.Request) {
 
 	r.Response.Status = 200
 
-}
-
-// writeModelDisabled 返回模型被禁用的响应。
-// 用 403 加独立的 code, 便于客户端与本项目日志区分"被禁用"与"触发限流"两种情况。
-func writeModelDisabled(r *ghttp.Request, model string) {
-	r.Response.Status = 403
-	r.Response.WriteJson(g.Map{
-		"detail": g.Map{
-			"code":    "model_disabled",
-			"message": "The model " + model + " is disabled.\n" + "模型 " + model + " 已被禁用,当前不可使用,请更换其他模型后重试.",
-		},
-	})
 }
 
 // 判断字符串是否包含数组中的任意一个元素

@@ -57,6 +57,12 @@
 
 ### 修复
 
+- 修复 `Authorization` 头长度不足 7 个字符时的 panic。原代码用 `token[7:]` 无条件截掉前 7 个字符、且只判断了非空，发送 `Authorization: abc` 这类短头会得到 `HTTP 500 slice bounds out of range`；同时该写法会把不带 `Bearer ` 前缀的 token 也截错，使不同用户碰撞到同一份额度。现改为仅当大小写不敏感地匹配到 `Bearer ` 前缀时才截断，其余情况按原值作为用户标识。
+- 修复限流值非法时返回 `HTTP 500 integer divide by zero` 的问题。`api/limit.go` 旧逻辑只校验了配置值里有没有 `/`，没校验次数与时长：`0/1h`、`abc/3h`（`gconv.Int("abc")` 为 `0`）都会由于 `rate.NewLimiter` 内部 `per/limit` 的整数除法而 panic；`-1/1h` 虽不 panic，但会让该模型恒返回 429、`please wait 0 seconds`，实际不可用。现新增 `parseModelRate()` 统一校验「次数为正整数、时长为可解析的正 duration」，非法时回退到兜底限流 `40/3h` 并输出 `WARN` 日志（与原先「值里没有 `/` 就回退」的既有行为保持一致，不再把配置写错升级成 500）。
+- 修复请求体无法解析时返回 200 的问题。`r.GetJson()` 失败后虽然写了 400 响应体，但缺少 `return`，会继续按空请求体走完后续流程，最后被 `r.Response.Status = 200` 覆盖。现在畸形 JSON 会正确返回 400。
+- 修正 429 响应体与 README「超速返回格式」不一致的问题。文档声明的是 `{"detail":{"clears_in":..,"code":"model_cap_exceeded","message":".."}}`，而实际返回的 `detail` 是纯字符串，`MsgPlus429` 常量从未被任何代码引用。现统一由 `writeTooManyRequests()` 生成与文档一致的响应体（`clears_in` 为预计等待秒数，预留失败时为 `0`），内容审核拦截也改为 `writeModerationRejected()`，两个未被复用的字符串常量 `MsgPlus429` / `MsgMod400` 一并移除，改用 `CodeModelCapExceeded` / `CodeModelDisabled` / `CodeFlaggedByModeration` 三个常量。这样「禁用返回格式」中「客户端可以依据 `code` 判断」的说法才成立。
+- 补充内容审核 fail-open 行为的代码注释（`api/audit_limit.go`）：审核接口不可达、返回非 JSON 或缺少 `results` 字段时会按“通过”放行，这是**有意为之**的设计，避免审核服务异常连带影响主业务；改成 fail-closed 会导致上游抖动时整个服务不可用。行为本身未改变。
+- 补充单元测试：合法限流值按配置生效；`0/1h`、`-1/1h`、`abc/3h`、`40`、`40/3`、`40/0s`、`40/3h/x` 等非法值统一回退到 `40/3h` 且不 panic。原先的 `TestGetVisitorWithModel` 无任何断言、且仍在使用已下线的模型名 `text-davinci-002-render-sha`，已一并重写。
 - **修复升级 gogf/gf 后 `config/config.yaml` 全部配置项被静默忽略的问题。**
   gf v2.10 起 `GetWithEnv` 会先用 `utils.FormatCmdKey()` 将键名转成小写再去查配置文件，而本项目 `config.yaml` 使用与 README 环境变量同名的大写键（如 `GPT-4O`、`TEXT-DAVINCI-002-RENDER-SHA`），键名被小写化后无法命中，导致配置被忽略并回退到硬编码兜底值。例如当时配置里用于验证的 `TEST: 1/1h` 会被读成 `40/3h`，`MODERATION` 也会退回硬编码地址（该调试用键已在同一版本中移除）。
   现已改为按原始键名显式查找（`config/config.go`、`api/limit.go` 中相关调用全部改用 `GetStringWithEnv`）。`GetEffective` / `MustGetEffective` 存在同样的小写化行为，无法用于规避此问题。
@@ -67,6 +73,10 @@
 
 ### 破坏性变更
 
+- **429 响应体的 `detail` 由字符串变为对象**（与 README 一致）。原先把 `detail` 当字符串读取的客户端需要改为读 `detail.message`；同时新增 `detail.code`（`model_cap_exceeded`）与 `detail.clears_in`。
+- `api.MsgPlus429`（未被使用的死代码）与 `api.MsgMod400` 两个导出常量已移除，改为 `api.CodeModelCapExceeded`、`api.CodeModelDisabled`、`api.CodeFlaggedByModeration` 与 `writeTooManyRequests()` / `writeModerationRejected()`。按 README 的响应格式对接的客户端不受影响。
+- 限流值非法时不再返回 500，而是回退到 `40/3h` 并打印 `WARN` 日志。**配置写错会静默降级为兜底限流**，请留意日志中的 `限流值 ... 非法`。
+- 不带 `Bearer ` 前缀的 `Authorization` 头不再被截掉前 7 个字符，而是按原值参与用户身份识别。若此前依赖该截断行为（发送自定义前缀），升级后同一用户会被识别为新身份、额度重新计算。
 - 需要 Go 1.26+ 才能构建。
 - 依赖 gf 的配置读取行为变化，已通过新增的 `GetStringWithEnv` 适配；若自行改动过 `config.yaml` 的键名大小写，请保持大写形式。
 - 配置优先级仍为 `配置文件 > 环境变量`，未发生变化：若 `config.yaml` 中已存在某个键，同名环境变量不会生效（`OAIKEY: ""` 会屏蔽 `OAIKEY` 环境变量）。仅当 `config.yaml` 中不存在该键（例如部署时未挂载配置文件）时，环境变量才会生效。

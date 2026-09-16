@@ -274,10 +274,14 @@ environment:
   "detail": {
     "clears_in": 252,
     "code": "model_cap_exceeded",
-    "message": "You have sent too many messages to the model. Please try again later."
+    "message": "You have triggered the usage frequency limit of gpt-5.6, the current limit is 60 times/3h0m0s, please wait 252 seconds before trying again.\n您已经触发 gpt-5.6 使用频率限制,当前限制为 60 次/3h0m0s,请等待 252 秒后再试."
   }
 }
 ```
+
+- `clears_in` 为预计需要等待的秒数；内部预留失败、无法给出具体时长时为 `0`。
+- `message` 中带有实际命中的模型名、当前生效的限流值与等待秒数，便于排障。
+- `detail` 是**对象而不是字符串**，客户端请读 `detail.code` / `detail.clears_in`，不要按字符串处理 `detail`。
 
 ## 禁用返回格式
 
@@ -292,7 +296,7 @@ environment:
 }
 ```
 
-与 429（额度耗尽）区分开，客户端可以依据 `code` 判断应直接提示用户更换模型。
+与 429（额度耗尽）区分开：本响应的 `code` 为 `model_disabled`，429 为 `model_cap_exceeded`，内容审核未通过为 `flagged_by_moderation`。客户端据此区分「提示用户更换模型」与「提示稍后重试」。
 
 ## 通用提示
 
@@ -303,6 +307,8 @@ environment:
   "detail": "别闹了"
 }
 ```
+
+命中违禁词（`data/keywords.txt`）时返回上述结构；请求体不是合法 JSON 时同样返回 400，此时 `detail` 为解析错误的原因。
 
 ## 正常返回
 

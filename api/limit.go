@@ -22,6 +22,33 @@ type visitor struct {
 	Per      time.Duration
 }
 
+// 限流配置非法时使用的兜底限流, 与历史上的硬编码兜底值保持一致。
+const (
+	defaultLimit = 40
+	defaultPer   = 3 * time.Hour
+)
+
+// parseModelRate 解析 "次数/时间" 形式的限流值, 例如 "20/3h"、"7/24h"。
+// 次数必须是正整数, 时长必须是可解析的正 duration, 否则返回 ok=false 交由调用方兜底。
+//
+// 为什么必须校验次数 > 0: rate.NewLimiter 内部有 per/limit 的整数除法,
+// limit 为 0 时(显式写 "0/1h", 或次数写成非数字而被 gconv.Int 转成 0)会直接 panic。
+func parseModelRate(value string) (limit int, per time.Duration, ok bool) {
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	limit = gconv.Int(parts[0])
+	if limit <= 0 {
+		return 0, 0, false
+	}
+	per, err := time.ParseDuration(parts[1])
+	if err != nil || per <= 0 {
+		return 0, 0, false
+	}
+	return limit, per, true
+}
+
 var visitors = make(map[string]*visitor)
 var mtx sync.Mutex
 
@@ -53,19 +80,13 @@ func GetVisitorWithModel(ctx g.Ctx, token, model string) (limit int, per time.Du
 	if modelrate == "" {
 		modelrate = config.GetStringWithEnv(ctx, "DEFAULT")
 	}
-	modelratearr := strings.Split(modelrate, "/")
-	// g.Dump(modelratearr)
-	if len(modelratearr) != 2 {
-		modelratearr = []string{"40", "3h"}
-	}
-	limit = gconv.Int(modelratearr[0])
-	// per = gconv.Duration(modelratearr[1])
-	per, err = time.ParseDuration(modelratearr[1])
-	if err != nil {
-		return 0, 0, nil, err
+	limit, per, ok := parseModelRate(modelrate)
+	if !ok {
+		// 配置值非法不该把该模型打成 500(会连累主业务), 统一回退到兜底限流并告警。
+		g.Log().Warningf(ctx, "限流值 %q 非法(应形如 \"次数/时间\", 次数为正整数且时长为合法正 duration), 模型 %q 回退到 %d/%s", modelrate, model, defaultLimit, defaultPer)
+		limit, per = defaultLimit, defaultPer
 	}
 	return limit, per, GetVisitor(token+"|"+modelKey, limit, per), nil
-
 }
 
 func CleanupVisitors() {
