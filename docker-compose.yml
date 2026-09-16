@@ -10,17 +10,43 @@ services:
     environment:
       PORT: 9611
       OAIKEY: "" # OpenAI API key 用于内容审核
+      # 限流值格式为 "次数/时间", 如 "60/3h" 表示每 3 小时最多 60 次。
+      # 将某个模型的值写成 DISABLED 表示禁止用户使用该模型, 请求会返回 403, 例如:
+      # GPT-5_5-WM: "DISABLED"
+      # 被注释掉的模型键表示该模型在上游 UI 中已不可选, 仅保留备用, 需要时去掉行首的 "# "。
       DEFAULT: "20/3h"
+      # Auto 档 (模型选择器中的「Auto」, 请求带 model=auto; 该模型名不在上游 models 清单中)
       AUTO: "200/3h"
-      TEXT-DAVINCI-002-RENDER-SHA: "200/3h"
-      GPT-4O-MINI: "200/3h"
-      GPT-4O: "60/3h"
-      GPT-4: "20/3h"
-      GPT-4O-CANMORE: "30/3h"
-      O1-PRO: "7/24h"
-      O3-PRO: "7/24h"
-      O3: "7/24h"
-      O4-MINI: "50/24h"
-      O4-MINI-HIGH: "50/24h"
+      # 研究 / 代理
       RESEARCH: "2/24h"
-    
+      AGENT: "2/24h"
+      # Pro
+      GPT-5-5-PRO: "7/24h"
+      GPT-5-6-PRO: "7/24h"
+      GPT-6-PRO: "7/24h"
+      # Thinking
+      GPT-5-5-THINKING: "20/3h"
+      GPT-5-6-THINKING: "20/3h"
+      # GPT-5-4-T-MINI: "20/3h" # 上游 UI 已不可选
+      GPT-5-6-T-MINI: "20/3h"
+      # 标准
+      # GPT-5-5: "60/3h" # 上游 UI 已不可选
+      GPT-5-6: "60/3h"
+      GPT-5-5-INSTANT: "60/3h"
+      GPT-5-6-INSTANT: "60/3h"
+      # 工作模式 / Codex, 模型名中的 "." 在配置键里写作 "_"
+      GPT-5_5-WM: "60/3h"
+      GPT-5_6-SOL-WM: "60/3h"
+      GPT-5_6-TERRA-WM: "60/3h"
+      GPT-5_6-LUNA-WM: "60/3h"
+      GPT-6-ASTRA-WM: "60/3h"
+      # Codex 内部别名
+      GPT-5_5: "60/3h"
+      GPT-5_6-SOL: "60/3h"
+      GPT-5_6-TERRA: "60/3h"
+      GPT-5_6-LUNA: "60/3h"
+      GPT-6-ASTRA: "60/3h"
+      # Mini (上游 UI 均不可选, 保留备用)
+      # GPT-5-3-MINI: "200/3h"
+      # GPT-5-5-MINI: "200/3h"
+      # GPT-5-6-MINI: "200/3h"

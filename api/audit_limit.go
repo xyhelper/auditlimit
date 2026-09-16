@@ -2,6 +2,7 @@ package api
 
 import (
 	"auditlimit/config"
+	"errors"
 	"strings"
 	"time"
 
@@ -49,6 +50,22 @@ func AuditLimit(r *ghttp.Request) {
 	prompt := reqJson.Get("messages.0.content.parts.0").String() // 输入内容
 	g.Log().Debug(ctx, "prompt", prompt)
 
+	// 研究 / 代理模式会用 system_hints 覆盖模型名,
+	// 提前覆盖, 使后面的禁用判断与限流都以最终生效的模型名为准。
+	if systemHints.Contains("research") {
+		model = "research"
+	}
+	if systemHints.Contains("agent") {
+		model = "agent"
+	}
+
+	// 模型被配置为禁用时直接拒绝, 不消耗额度, 也不做内容审核
+	if config.IsModelDisabled(ctx, model) {
+		g.Log().Info(ctx, "model disabled", model)
+		writeModelDisabled(r, model)
+		return
+	}
+
 	// 判断提问内容是否包含禁止词
 	if containsAny(ctx, prompt, config.ForbiddenWords) {
 		r.Response.Status = 400
@@ -82,14 +99,14 @@ func AuditLimit(r *ghttp.Request) {
 			return
 		}
 	}
-	if systemHints.Contains("research") {
-		model = "research"
-	}
-	if systemHints.Contains("agent") {
-		model = "agent"
-	}
 	limit, per, limiter, err := GetVisitorWithModel(ctx, token, model)
 	if err != nil {
+		// 正常情况下禁用的模型已在前面拦下, 这里兜底, 避免漏网时被当成 500 内部错误。
+		if errors.Is(err, ErrModelDisabled) {
+			g.Log().Info(ctx, "model disabled", model)
+			writeModelDisabled(r, model)
+			return
+		}
 		g.Log().Error(ctx, "GetVisitorWithModel", err)
 		r.Response.Status = 500
 		r.Response.WriteJson(g.Map{
@@ -125,6 +142,18 @@ func AuditLimit(r *ghttp.Request) {
 
 	r.Response.Status = 200
 
+}
+
+// writeModelDisabled 返回模型被禁用的响应。
+// 用 403 加独立的 code, 便于客户端与本项目日志区分"被禁用"与"触发限流"两种情况。
+func writeModelDisabled(r *ghttp.Request, model string) {
+	r.Response.Status = 403
+	r.Response.WriteJson(g.Map{
+		"detail": g.Map{
+			"code":    "model_disabled",
+			"message": "The model " + model + " is disabled.\n" + "模型 " + model + " 已被禁用,当前不可使用,请更换其他模型后重试.",
+		},
+	})
 }
 
 // 判断字符串是否包含数组中的任意一个元素
