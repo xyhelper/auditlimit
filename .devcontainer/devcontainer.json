@@ -3,9 +3,8 @@
 {
 	"name": "AuditLimit Dev Container",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/universal:5-linux",
+	"image": "mcr.microsoft.com/devcontainers/universal:6-linux",
 	"features": {
-		"ghcr.io/devcontainers/features/go:1": {},
 		"ghcr.io/devcontainers-extra/features/cloudflared:1": {}
 	},
 
