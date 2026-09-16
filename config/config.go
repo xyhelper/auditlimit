@@ -24,7 +24,7 @@ var (
 	MODERATION = "https://gateway.ai.cloudflare.com/v1/040ac2002b4dd67637e97c628feb3484/xyhelper/openai/moderations"
 )
 
-// GetStringWithEnv 读取配置项,优先级为: 环境变量 > 配置文件 > 默认值。
+// GetStringWithEnv 读取字符串配置项,优先级为: 配置文件 > 环境变量 > 默认值。
 //
 // 为什么不直接使用 g.Cfg().MustGetWithEnv:
 // gogf/gf v2.10 起 GetWithEnv 会先用 utils.FormatCmdKey 把键名转成小写再去配置文件里查找,
@@ -33,13 +33,14 @@ var (
 //
 // 另外这里使用 Get 而不是 MustGet,因为在没有配置文件时(例如 Docker 镜像内)MustGet 会 panic。
 func GetStringWithEnv(ctx context.Context, key string, def ...string) string {
+	// 配置文件优先: 只要配置文件中存在该键就直接采用,即使其值为空字符串。
+	// 这与旧版 gf 的 GetWithEnv 行为一致,即配置文件里显式留空的项不会被同名环境变量覆盖。
+	if v, err := g.Cfg().Get(ctx, key); err == nil && v != nil && !v.IsNil() {
+		return v.String()
+	}
+	// 仅在配置文件中不存在该键时,才回退到环境变量。
 	if v := os.Getenv(key); v != "" {
 		return v
-	}
-	if v, err := g.Cfg().Get(ctx, key); err == nil && v != nil && !v.IsNil() {
-		if s := v.String(); s != "" {
-			return s
-		}
 	}
 	if len(def) > 0 {
 		return def[0]
