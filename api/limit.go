@@ -82,8 +82,12 @@ func GetVisitorWithModel(ctx g.Ctx, token, model string) (limit int, per time.Du
 	}
 	limit, per, ok := parseModelRate(modelrate)
 	if !ok {
-		// 配置值非法不该把该模型打成 500(会连累主业务), 统一回退到兜底限流并告警。
-		g.Log().Warningf(ctx, "限流值 %q 非法(应形如 \"次数/时间\", 次数为正整数且时长为合法正 duration), 模型 %q 回退到 %d/%s", modelrate, model, defaultLimit, defaultPer)
+		// 值为空是"未配置"的常态(例如 Docker 部署未挂载 config.yaml 且未设环境变量),
+		// 静默回退即可, 避免每个请求都刷一条告警; 只有写了值却写错才需要提醒。
+		if modelrate != "" {
+			// 配置值非法不该把该模型打成 500(会连累主业务), 统一回退到兜底限流并告警。
+			g.Log().Warningf(ctx, "限流值 %q 非法(应形如 \"次数/时间\", 次数为正整数且时长为合法正 duration), 模型 %q 回退到 %d/%s", modelrate, model, defaultLimit, defaultPer)
+		}
 		limit, per = defaultLimit, defaultPer
 	}
 	return limit, per, GetVisitor(token+"|"+modelKey, limit, per), nil
